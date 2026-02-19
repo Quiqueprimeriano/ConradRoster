@@ -63,6 +63,7 @@ const formatTime = (time) => {
 
 export default function App() {
   const [daysToShow, setDaysToShow] = useState(21);
+  const [pastDays, setPastDays] = useState(0);
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -113,7 +114,7 @@ export default function App() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    for (let i = 0; i < daysToShow; i++) {
+    for (let i = -pastDays; i < daysToShow; i++) {
       const date = new Date(today);
       date.setDate(date.getDate() + i);
       days.push(date);
@@ -135,6 +136,11 @@ export default function App() {
 
   const isToday = (date) => new Date().toDateString() === date.toDateString();
   const isWeekend = (date) => date.getDay() === 0 || date.getDay() === 6;
+  const isPast = (date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return date < today;
+  };
 
   const getShiftTimes = (dateKey, shiftId, defaultShift) => {
     const shiftData = getShiftData(dateKey, shiftId);
@@ -254,6 +260,13 @@ export default function App() {
 
       {/* Main Content */}
       <div className="max-w-3xl mx-auto px-2 sm:px-4 md:px-6 py-3 sm:py-4">
+        <button
+          onClick={() => setPastDays(prev => prev + 7)}
+          className="w-full py-4 bg-white rounded-xl sm:rounded-2xl shadow-sm text-blue-500 text-sm sm:text-base font-semibold hover:bg-blue-50 active:bg-blue-100 transition-colors mb-3"
+        >
+          ↑ Load previous days
+        </button>
+
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-sm overflow-hidden">
           <table className="w-full border-collapse">
             <thead>
@@ -270,6 +283,7 @@ export default function App() {
                 const { day, num, month } = formatDisplayDate(date);
                 const today = isToday(date);
                 const weekend = isWeekend(date);
+                const past = isPast(date);
                 const eveningSuppressed = isEveningSuppressed(dateKey);
                 
                 const shiftsToShow = eveningSuppressed 
@@ -287,7 +301,7 @@ export default function App() {
                   return (
                     <tr 
                       key={`${dateKey}-${shift.id}`}
-                      className={`${today ? 'bg-blue-50' : weekend ? 'bg-slate-50' : 'bg-white'} ${isLastShift ? 'border-b-4 border-slate-200' : 'border-b border-slate-100'}`}
+                      className={`${today ? 'bg-blue-50' : weekend ? 'bg-slate-50' : 'bg-white'} ${isLastShift ? 'border-b-4 border-slate-200' : 'border-b border-slate-100'} ${past ? 'opacity-60' : ''}`}
                     >
                       {idx === 0 && (
                         <td 

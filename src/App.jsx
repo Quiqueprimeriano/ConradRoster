@@ -109,6 +109,7 @@ export default function App() {
   const [carePlan, setCarePlan] = useState(null);
   const [carePlanInputs, setCarePlanInputs] = useState({});
   const [dailyChecks, setDailyChecks] = useState({});
+  const [hiddenCarers, setHiddenCarers] = useState({});
 
   const knownCarers = useMemo(() => {
     const counts = {};
@@ -118,9 +119,10 @@ export default function App() {
       }
     });
     return Object.entries(counts)
+      .filter(([name]) => !hiddenCarers[name])
       .sort((a, b) => b[1] - a[1])
       .map(([name]) => name);
-  }, [data]);
+  }, [data, hiddenCarers]);
 
   useEffect(() => {
     const dataRef = ref(database, 'shifts');
@@ -164,6 +166,20 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    const hcRef = ref(database, 'hiddenCarers');
+    const unsubscribe = onValue(hcRef, (snapshot) => {
+      setHiddenCarers(snapshot.val() || {});
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const hideCarer = async (name) => {
+    const updated = { ...hiddenCarers, [name]: true };
+    setHiddenCarers(updated);
+    await set(ref(database, 'hiddenCarers'), updated);
+  };
 
   const saveData = async (newData) => {
     setData(newData);
@@ -919,16 +935,23 @@ export default function App() {
                       {knownCarers.map((name) => {
                         const colors = generateColor(name);
                         return (
-                          <button
-                            key={name}
-                            onClick={() => {
-                              updateShiftData(modal.dateKey, modal.shiftId, { name });
-                              closeModal();
-                            }}
-                            className={`${colors.bg} ${colors.text} px-3 py-1.5 rounded-full text-sm font-semibold hover:opacity-80 active:opacity-60 transition-opacity`}
-                          >
-                            {name}
-                          </button>
+                          <div key={name} className={`${colors.bg} ${colors.text} rounded-full flex items-center`}>
+                            <button
+                              onClick={() => {
+                                updateShiftData(modal.dateKey, modal.shiftId, { name });
+                                closeModal();
+                              }}
+                              className="pl-3 py-1.5 text-sm font-semibold hover:opacity-80 active:opacity-60 transition-opacity"
+                            >
+                              {name}
+                            </button>
+                            <button
+                              onClick={() => hideCarer(name)}
+                              className="pl-1 pr-2 py-1.5 text-sm opacity-40 hover:opacity-80 active:opacity-100 transition-opacity"
+                            >
+                              ×
+                            </button>
+                          </div>
                         );
                       })}
                     </div>

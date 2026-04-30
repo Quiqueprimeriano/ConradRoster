@@ -294,7 +294,7 @@ export default function App() {
     }
 
     return {
-      start: (shiftId === 'morning' && dateKey >= '2026-02-02') ? '09:00' : (shiftData.timeStart || defaultShift.timeStart),
+      start: shiftData.timeStart || defaultShift.timeStart,
       end: shiftData.timeEnd || defaultShift.timeEnd
     };
   };

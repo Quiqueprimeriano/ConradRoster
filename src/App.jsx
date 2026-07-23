@@ -623,7 +623,7 @@ export default function App() {
       </div>
 
       {/* Main Content */}
-      <div className="max-w-3xl mx-auto px-2 sm:px-4 md:px-6 py-3 sm:py-4" style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))' }}>
+      <div className="max-w-3xl mx-auto px-2 sm:px-4 md:px-6 py-3 sm:py-4" style={{ paddingBottom: 'calc(5.5rem + env(safe-area-inset-bottom, 0px))' }}>
 
         {/* ROSTER VIEW */}
         {activeView === 'roster' && (
@@ -1493,7 +1493,7 @@ export default function App() {
       )}
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-30" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-30" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' }}>
         <div className="max-w-3xl mx-auto flex">
           {[
             {

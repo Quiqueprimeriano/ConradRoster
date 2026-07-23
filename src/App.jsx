@@ -62,6 +62,30 @@ const formatTime = (time) => {
   return `${hour12}:${String(min).padStart(2, '0')}${ampm}`;
 };
 
+const MOODS = [
+  { id: 'good', emoji: '😀', label: 'Good' },
+  { id: 'ok', emoji: '😐', label: 'Okay' },
+  { id: 'low', emoji: '😟', label: 'Low' },
+];
+
+const formatNoteTime = (ms) => {
+  const d = new Date(ms);
+  return formatTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
+};
+
+// Inverse of formatDateKey (which is UTC-based via toISOString). A naive local
+// parse is off-by-one in timezones ahead of UTC (e.g. Sydney), so find the local
+// day whose formatDateKey matches the stored key — keeps display in sync with the cards.
+const parseDateKey = (key) => {
+  const [y, m, d] = key.split('-').map(Number);
+  for (let delta = -1; delta <= 1; delta++) {
+    const cand = new Date(y, m - 1, d + delta);
+    cand.setHours(0, 0, 0, 0);
+    if (cand.toISOString().split('T')[0] === key) return cand;
+  }
+  return new Date(y, m - 1, d);
+};
+
 const renderNotes = (text, onToggle, checkedOverrides) => {
   if (!text) return null;
   const lines = text.split('\n');
@@ -111,6 +135,10 @@ export default function App() {
   const [dailyChecks, setDailyChecks] = useState({});
   const [hiddenCarers, setHiddenCarers] = useState({});
 
+  const [dailyNotes, setDailyNotes] = useState({});
+  const [diaryDaysToShow, setDiaryDaysToShow] = useState(14);
+  const [noteInputs, setNoteInputs] = useState({ mood: '', fallStatus: '', fallDetail: '', text: '', handoff: '' });
+
   const knownCarers = useMemo(() => {
     const counts = {};
     Object.values(data).forEach(shift => {
@@ -123,6 +151,18 @@ export default function App() {
       .sort((a, b) => b[1] - a[1])
       .map(([name]) => name);
   }, [data, hiddenCarers]);
+
+  const diarySummary = useMemo(() => {
+    const keys = Object.keys(dailyNotes).sort().reverse();
+    let currentMood = null, lastFallKey = null, latestHandoff = null;
+    for (const k of keys) {
+      const n = dailyNotes[k];
+      if (!currentMood && n.mood) currentMood = { mood: n.mood, dateKey: k };
+      if (!lastFallKey && n.fallStatus === 'fall') lastFallKey = k;
+      if (!latestHandoff && n.handoff) latestHandoff = { text: n.handoff, author: n.lastAuthor, dateKey: k };
+    }
+    return { currentMood, lastFallKey, latestHandoff };
+  }, [dailyNotes]);
 
   useEffect(() => {
     const dataRef = ref(database, 'shifts');
@@ -171,6 +211,16 @@ export default function App() {
     const hcRef = ref(database, 'hiddenCarers');
     const unsubscribe = onValue(hcRef, (snapshot) => {
       setHiddenCarers(snapshot.val() || {});
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const notesRef = ref(database, 'dailyNotes');
+    const unsubscribe = onValue(notesRef, (snapshot) => {
+      setDailyNotes(snapshot.val() || {});
+    }, (error) => {
+      console.error('Firebase dailyNotes error:', error);
     });
     return () => unsubscribe();
   }, []);
@@ -246,6 +296,90 @@ export default function App() {
     const current = data[key] || {};
     const newData = { ...data, [key]: { ...current, ...updates } };
     saveData(newData);
+  };
+
+  const getDayCarer = (dateKey) => {
+    const names = [...new Set([getShiftData(dateKey, 'morning').name, getShiftData(dateKey, 'evening').name].filter(Boolean))];
+    return names.join(' / ');
+  };
+
+  const getNextShiftInfo = () => {
+    const now = new Date();
+    const todayMidnight = new Date();
+    todayMidnight.setHours(0, 0, 0, 0);
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(todayMidnight);
+      d.setDate(d.getDate() + i);
+      const dateKey = formatDateKey(d);
+      const defaults = getDefaultShifts(dateKey);
+      const shifts = isEveningSuppressed(dateKey) ? [defaults[0]] : defaults;
+      for (const shift of shifts) {
+        const times = getShiftTimes(dateKey, shift.id, shift);
+        const [h, m] = times.start.split(':').map(Number);
+        const startDt = new Date(d);
+        startDt.setHours(h, m, 0, 0);
+        if (startDt > now) {
+          const diff = Math.round((d - todayMidnight) / 86400000);
+          const when = diff === 0 ? 'today' : diff === 1 ? 'tomorrow'
+            : (() => { const { day, num, month } = formatDisplayDate(d); return `${day} ${num} ${month}`; })();
+          return { name: getShiftData(dateKey, shift.id).name || '', label: shift.label, when, dateKey, shiftId: shift.id };
+        }
+      }
+    }
+    return null;
+  };
+
+  const getDiaryDays = () => {
+    const days = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    for (let i = 0; i < diaryDaysToShow; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      days.push(d);
+    }
+    return days;
+  };
+
+  const saveDayNote = async (dateKey, f, author) => {
+    const text = (f.text || '').trim();
+    const handoff = (f.handoff || '').trim();
+    const fallDetail = (f.fallDetail || '').trim();
+    const hasContent = text || handoff || f.mood || f.fallStatus;
+    const newNotes = { ...dailyNotes };
+    if (hasContent) {
+      newNotes[dateKey] = {
+        mood: f.mood || '',
+        fallStatus: f.fallStatus || '',
+        fallDetail: f.fallStatus === 'fall' ? fallDetail : '',
+        text,
+        handoff,
+        lastAuthor: author,
+        updatedAt: Date.now(),
+      };
+    } else {
+      delete newNotes[dateKey];
+    }
+    setDailyNotes(newNotes);
+    setSyncing(true);
+    try {
+      await set(ref(database, `dailyNotes/${dateKey}`), hasContent ? newNotes[dateKey] : null);
+    } catch (e) {
+      console.error('Error saving day note:', e);
+    }
+    setSyncing(false);
+  };
+
+  const openDayNoteModal = (dateKey) => {
+    const n = dailyNotes[dateKey] || {};
+    setNoteInputs({
+      mood: n.mood || '',
+      fallStatus: n.fallStatus || '',
+      fallDetail: n.fallDetail || '',
+      text: n.text || '',
+      handoff: n.handoff || '',
+    });
+    setModal({ show: true, type: 'dayNote', dateKey, shiftId: '' });
   };
 
   const getDays = () => {
@@ -432,6 +566,8 @@ export default function App() {
 
       updated.updatedDate = today;
       saveCarePlan(updated);
+    } else if (type === 'dayNote') {
+      saveDayNote(dateKey, noteInputs, getDayCarer(dateKey));
     }
 
     closeModal();
@@ -444,6 +580,8 @@ export default function App() {
       updateShiftData(dateKey, shiftId, { name: '' });
     } else if (type === 'comment') {
       updateShiftData(dateKey, shiftId, { comment: '' });
+    } else if (type === 'dayNote') {
+      saveDayNote(dateKey, { text: '', handoff: '', mood: '', fallStatus: '', fallDetail: '' }, getDayCarer(dateKey));
     }
 
     closeModal();
@@ -457,6 +595,8 @@ export default function App() {
     );
   }
 
+  const nextShift = getNextShiftInfo();
+
   return (
     <div className="min-h-screen bg-slate-100">
       {/* Header */}
@@ -466,6 +606,7 @@ export default function App() {
             {activeView === 'roster' && 'Conrad Carers Schedule'}
             {activeView === 'carePlan' && "Conrad's Care Plan"}
             {activeView === 'contacts' && 'Contacts'}
+            {activeView === 'diary' && 'Daily Notes'}
           </h1>
           <p className="text-xs sm:text-sm text-center text-slate-400 mt-1">
             {activeView === 'roster' && <>Tap to edit {syncing && <span className="text-blue-500">• Syncing...</span>}</>}
@@ -476,6 +617,7 @@ export default function App() {
               </>
             )}
             {activeView === 'contacts' && 'Tap to call'}
+            {activeView === 'diary' && <>Day-by-day tracking {syncing && <span className="text-blue-500">• Syncing...</span>}</>}
           </p>
         </div>
       </div>
@@ -854,6 +996,96 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* DIARY VIEW */}
+        {activeView === 'diary' && (
+          <div className="space-y-3">
+            {/* Current status */}
+            <div className="bg-white rounded-xl sm:rounded-2xl shadow-sm p-4 sm:p-5">
+              <span className="text-xs font-bold text-blue-500 uppercase">Current Status</span>
+              <div className="mt-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400 w-20 shrink-0">Mood</span>
+                  {(() => {
+                    const m = diarySummary.currentMood ? MOODS.find(mm => mm.id === diarySummary.currentMood.mood) : null;
+                    return m
+                      ? <span className="text-sm font-semibold text-slate-700">{m.emoji} {m.label}</span>
+                      : <span className="text-sm text-slate-300">—</span>;
+                  })()}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400 w-20 shrink-0">Last fall</span>
+                  {diarySummary.lastFallKey ? (() => {
+                    const t = new Date();
+                    t.setHours(0, 0, 0, 0);
+                    const diff = Math.round((t - parseDateKey(diarySummary.lastFallKey)) / 86400000);
+                    const label = diff <= 0 ? 'Today' : diff === 1 ? 'Yesterday' : `${diff} days ago`;
+                    return <span className="text-sm font-semibold text-red-600">{label}</span>;
+                  })() : (
+                    <span className="text-sm font-semibold text-emerald-600">No falls recorded</span>
+                  )}
+                </div>
+                {diarySummary.latestHandoff && (
+                  <div className="bg-amber-50 rounded-lg px-3 py-2 mt-1">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-xs font-bold text-amber-700 uppercase">For the next carer</span>
+                      {nextShift && (
+                        <span className="text-xs font-semibold text-amber-600 text-right">{nextShift.name || 'Unassigned'} · {nextShift.label} ({nextShift.when})</span>
+                      )}
+                    </div>
+                    <p className="text-sm text-amber-800 mt-1 whitespace-pre-wrap">{diarySummary.latestHandoff.text}</p>
+                    <p className="text-xs text-amber-500 mt-1">
+                      from {diarySummary.latestHandoff.author ? `${diarySummary.latestHandoff.author}, ` : ''}
+                      {(() => {
+                        const { day, num, month } = formatDisplayDate(parseDateKey(diarySummary.latestHandoff.dateKey));
+                        return `${day} ${num} ${month}`;
+                      })()}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Day log */}
+            {getDiaryDays().map((date) => {
+              const dateKey = formatDateKey(date);
+              const { day, num, month } = formatDisplayDate(date);
+              const n = dailyNotes[dateKey];
+              const mood = n?.mood ? MOODS.find(m => m.id === n.mood) : null;
+              const today = isToday(date);
+              return (
+                <div
+                  key={dateKey}
+                  onClick={() => openDayNoteModal(dateKey)}
+                  className={`bg-white rounded-xl sm:rounded-2xl shadow-sm p-4 cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors ${today ? 'ring-2 ring-blue-400' : ''}`}
+                >
+                  <div className="flex items-baseline justify-between mb-1">
+                    <span className="text-sm font-bold text-slate-800">{day} {num} {month}{today && ' · Today'}</span>
+                    {n?.updatedAt && <span className="text-xs text-slate-400">{n.lastAuthor ? `${n.lastAuthor} · ` : ''}{formatNoteTime(n.updatedAt)}</span>}
+                  </div>
+                  {n ? (
+                    <>
+                      {mood && <p className="text-sm mb-1">{mood.emoji} <span className="text-slate-500">{mood.label}</span></p>}
+                      {n.fallStatus === 'fall' && <p className="text-sm text-red-600 mb-1">🔴 Fall{n.fallDetail && `: ${n.fallDetail}`}</p>}
+                      {n.fallStatus === 'no_falls' && <p className="text-sm text-emerald-600 mb-1">✓ No falls</p>}
+                      {n.text && <p className="whitespace-pre-wrap text-sm text-slate-700">{n.text}</p>}
+                      {n.handoff && <p className="mt-1 text-sm text-amber-700 bg-amber-50 rounded-lg px-2 py-1 whitespace-pre-wrap">⚠ For next carer: {n.handoff}</p>}
+                    </>
+                  ) : (
+                    <span className="text-slate-300 text-sm">+ Add note</span>
+                  )}
+                </div>
+              );
+            })}
+
+            <button
+              onClick={() => setDiaryDaysToShow(prev => prev + 14)}
+              className="w-full py-4 bg-white rounded-xl sm:rounded-2xl shadow-sm text-blue-500 text-sm sm:text-base font-semibold hover:bg-blue-50 active:bg-blue-100 transition-colors"
+            >
+              ↑ Load earlier days
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Modal */}
@@ -982,6 +1214,101 @@ export default function App() {
                   autoFocus
                   onKeyDown={(e) => e.key === 'Enter' && handleSave()}
                 />
+              </>
+            )}
+
+            {modal.type === 'dayNote' && (
+              <>
+                <h2 className="text-lg sm:text-xl font-bold text-slate-800 mb-1">
+                  Daily Note
+                  {modal.dateKey && (() => {
+                    const { day, num, month } = formatDisplayDate(parseDateKey(modal.dateKey));
+                    return <span className="text-slate-400 font-normal"> · {day} {num} {month}</span>;
+                  })()}
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-400 mb-4">
+                  How was Conrad's day?
+                  {modal.dateKey && getDayCarer(modal.dateKey) && (
+                    <span className="text-slate-500 font-medium"> — {getDayCarer(modal.dateKey)}</span>
+                  )}
+                </p>
+
+                {/* Mood */}
+                <div className="mb-4">
+                  <p className="text-xs text-slate-500 font-medium mb-2">Mood</p>
+                  <div className="flex gap-2">
+                    {MOODS.map((m) => {
+                      const selected = noteInputs.mood === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          onClick={() => setNoteInputs({ ...noteInputs, mood: selected ? '' : m.id })}
+                          className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${selected ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                        >
+                          {m.emoji} {m.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Falls / incidents */}
+                <div className="mb-4">
+                  <p className="text-xs text-slate-500 font-medium mb-2">Any falls or incidents?</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setNoteInputs({ ...noteInputs, fallStatus: noteInputs.fallStatus === 'no_falls' ? '' : 'no_falls' })}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${noteInputs.fallStatus === 'no_falls' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                    >
+                      ✓ No falls
+                    </button>
+                    <button
+                      onClick={() => setNoteInputs({ ...noteInputs, fallStatus: noteInputs.fallStatus === 'fall' ? '' : 'fall' })}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${noteInputs.fallStatus === 'fall' ? 'bg-red-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                    >
+                      🔴 Had a fall
+                    </button>
+                  </div>
+                  {noteInputs.fallStatus === 'fall' && (
+                    <textarea
+                      value={noteInputs.fallDetail}
+                      onChange={(e) => setNoteInputs({ ...noteInputs, fallDetail: e.target.value })}
+                      rows={2}
+                      placeholder="What happened?"
+                      className="w-full mt-2 px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm resize-none"
+                    />
+                  )}
+                </div>
+
+                {/* Note */}
+                <div className="mb-4">
+                  <p className="text-xs text-slate-500 font-medium mb-2">Note</p>
+                  <textarea
+                    value={noteInputs.text}
+                    onChange={(e) => setNoteInputs({ ...noteInputs, text: e.target.value })}
+                    rows={6}
+                    placeholder="How was the day? Activities, mood, health, meals..."
+                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm resize-none"
+                    autoFocus
+                  />
+                </div>
+
+                {/* Handoff */}
+                <div className="mb-6">
+                  <p className="text-xs text-slate-500 font-medium mb-2">
+                    For the next carer
+                    {nextShift && (
+                      <span className="text-blue-500 font-semibold"> — {nextShift.name || 'Unassigned'} · {nextShift.label} ({nextShift.when})</span>
+                    )}
+                  </p>
+                  <textarea
+                    value={noteInputs.handoff}
+                    onChange={(e) => setNoteInputs({ ...noteInputs, handoff: e.target.value })}
+                    rows={2}
+                    placeholder="Anything the next carer should know?"
+                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm resize-none"
+                  />
+                </div>
               </>
             )}
 
@@ -1143,7 +1470,7 @@ export default function App() {
             )}
 
             <div className="flex gap-3">
-              {(modal.type === 'name' || modal.type === 'comment') && inputValue && (
+              {(((modal.type === 'name' || modal.type === 'comment') && inputValue) || (modal.type === 'dayNote' && dailyNotes[modal.dateKey])) && (
                 <button onClick={handleClear} className="px-4 py-3 text-red-500 bg-red-50 rounded-xl text-sm sm:text-base font-semibold hover:bg-red-100 active:bg-red-200 transition-colors">
                   Clear
                 </button>
@@ -1177,6 +1504,16 @@ export default function App() {
                   <rect x="3" y="4" width="18" height="18" rx="2" />
                   <path d="M16 2v4M8 2v4M3 10h18" />
                   <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" />
+                </svg>
+              ),
+            },
+            {
+              id: 'diary',
+              label: 'Diary',
+              icon: (active) => (
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={active ? 2.5 : 1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
                 </svg>
               ),
             },

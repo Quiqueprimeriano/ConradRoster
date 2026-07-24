@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { database } from './firebase';
 import { ref, onValue, set } from 'firebase/database';
 import { GUIDELINES } from './guidelinesData';
@@ -123,6 +123,19 @@ export default function App() {
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+
+  // Anchor scroll position when prepending previous days so the view doesn't jump.
+  const prevScrollRef = useRef(null);
+  const loadPreviousDays = () => {
+    prevScrollRef.current = { height: document.documentElement.scrollHeight, top: window.scrollY };
+    setPastDays(prev => prev + 7);
+  };
+  useLayoutEffect(() => {
+    if (!prevScrollRef.current) return;
+    const delta = document.documentElement.scrollHeight - prevScrollRef.current.height;
+    window.scrollTo(0, prevScrollRef.current.top + delta);
+    prevScrollRef.current = null;
+  }, [pastDays]);
 
   const [activeView, setActiveView] = useState('roster');
   const [guidelinesTab, setGuidelinesTab] = useState('daily');
@@ -629,7 +642,7 @@ export default function App() {
         {activeView === 'roster' && (
           <>
             <button
-              onClick={() => setPastDays(prev => prev + 7)}
+              onClick={loadPreviousDays}
               className="w-full py-4 bg-white rounded-xl sm:rounded-2xl shadow-sm text-blue-500 text-sm sm:text-base font-semibold hover:bg-blue-50 active:bg-blue-100 transition-colors mb-3"
             >
               ↑ Load previous days

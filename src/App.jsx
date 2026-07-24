@@ -681,6 +681,16 @@ export default function App() {
                                 <div className="text-2xl sm:text-3xl font-bold leading-none">{num}</div>
                                 <div className={`text-xs sm:text-sm font-medium mt-1 ${today ? 'text-blue-100' : 'text-slate-500'}`}>{day}</div>
                                 <div className={`text-xs ${today ? 'text-blue-200' : 'text-slate-400'}`}>{month}</div>
+                                {dailyNotes[dateKey]?.fallStatus === 'fall' && (
+                                  <div className="mt-1.5 flex justify-center" title="Fall recorded">
+                                    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold ring-1 ring-white/70">!</span>
+                                  </div>
+                                )}
+                                {dailyNotes[dateKey]?.fallStatus === 'no_falls' && (
+                                  <div className="mt-1.5 flex justify-center" title="No falls">
+                                    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-emerald-500 text-white text-[9px] font-bold ring-1 ring-white/70">✓</span>
+                                  </div>
+                                )}
                                 {today && (
                                   <div className="mt-1.5">
                                     <span className="text-xs font-bold bg-white text-blue-500 px-2 py-0.5 rounded-full">TODAY</span>
